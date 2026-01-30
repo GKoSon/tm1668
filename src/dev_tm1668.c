@@ -3,11 +3,11 @@
  * @brief  RT-Thread driver for TM1668 7-segment LED display
  * @author GKoSon
  * @date   2025-12-22
+ * @modify  适配老版本RT-Thread（通过rt_device_ops绑定设备接口）
  */
 #include "rtconfig.h"
 #include <rtthread.h>
 #include <rtdevice.h>
-
 /* -------------------------- 1. 基础定义 -------------------------- */
 // 硬件参数
 #define TM1668_DEV_NAME    "tm1668"  /* 设备名称 */
@@ -104,6 +104,18 @@ static rt_err_t tm1668_dev_open(rt_device_t device, rt_uint16_t oflag) {
 
     return RT_EOK;
 }
+#ifdef RT_USING_DEVICE_OPS
+const static struct rt_device_ops ops =
+{
+    tm1668_dev_init,
+    tm1668_dev_open,
+    RT_NULL,
+    tm1668_dev_write,
+    RT_NULL,
+    RT_NULL,
+	RT_NULL
+};
+#endif
 static int tm1668_hw_init(void) {
     // 1. 初始化GPIO
     rt_pin_mode(TM1668_STB_PIN, PIN_MODE_OUTPUT);
@@ -116,12 +128,17 @@ static int tm1668_hw_init(void) {
         rt_kprintf("tm1668: alloc memory failed!\n");
         return -RT_ENOMEM;
     }
-    // 3. 直接绑定设备接口函数（不使用ops结构体）
+	// 3. 直接绑定设备接口函数
+#ifdef RT_USING_DEVICE_OPS
+    dev->parent.ops = &ops; 
+#else
     dev->parent.init  = tm1668_dev_init;  // 绑定初始化函数
     dev->parent.open  = tm1668_dev_open;  // 绑定open函数
     dev->parent.write = tm1668_dev_write; // 绑定写函数
+#endif
     dev->parent.type  = RT_Device_Class_Miscellaneous; // 设备类型（杂项设备）
-    dev->parent.flag  = RT_DEVICE_FLAG_WRONLY;         // 只写设备（LED显示无需读）
+    dev->parent.flag = RT_DEVICE_FLAG_WRONLY;         // 设备属性：只写设备（LED显示无需读取）
+    dev->parent.ref_count = 0;                        // 引用计数初始化
     // 4. 注册设备到RT-Thread内核
     rt_err_t ret = rt_device_register(&dev->parent, TM1668_DEV_NAME, RT_DEVICE_FLAG_WRONLY);
     if(ret != RT_EOK) {
@@ -144,7 +161,9 @@ static int tm1668_hw_init(void) {
         return -RT_ERROR;
     }
     // 6. 初始化缓冲区
-    rt_memset(dev->fb_front, 0x00, TM1668_SEG_CNT);//改0x00->OXFF就全ON
+    // 6. 初始化显示缓冲区（初始值0x00，所有LED熄灭；改为0xFF可全亮）
+    rt_memset(dev->fb_front, 0x00, TM1668_SEG_CNT);
+    rt_memset(dev->fb_back, 0x00, TM1668_SEG_CNT);
     // 7. 启动定时器
     rt_timer_start(dev->refresh_timer);
     rt_kprintf("tm1668: init success! \n");
